@@ -1,0 +1,119 @@
+name: CI/CD ECS
+
+on:
+  push:
+    branches: [development, preprod, prod]
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    env:
+      AWS_REGION: ${{ secrets.AWS_REGION }}
+      AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+      ECR_REPO: ${{ secrets.ECR_REPO }}
+      CONTAINER_NAME: ${{ secrets.CONTAINER_NAME }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Seleccionar entorno por rama
+        id: envmap
+        run: |
+          if [ "${GITHUB_REF_NAME}" = "development" ]; then
+            echo "ENV=dev" >> $GITHUB_OUTPUT
+            echo "ECS_CLUSTER=    ${{ vars.ECS_CLUSTER_DEV }}" >> $GITHUB_OUTPUT
+            echo "ECS_SERVICE=    ${{ vars.ECS_SERVICE_DEV }}" >> $GITHUB_OUTPUT
+            echo "TASK_FAMILY=    ${{ vars.TASK_FAMILY_DEV }}" >> $GITHUB_OUTPUT
+            echo "CONTAINER_NAME= ${{ vars.CONTAINER_NAME_DEV }}" >> $GITHUB_OUTPUT
+          elif [ "${GITHUB_REF_NAME}" = "preprod" ]; then
+            echo "ENV=preprod" >> $GITHUB_OUTPUT
+            echo "ECS_CLUSTER=${{ vars.ECS_CLUSTER_PREPROD }}" >> $GITHUB_OUTPUT
+            echo "ECS_SERVICE=${{ vars.ECS_SERVICE_PREPROD }}" >> $GITHUB_OUTPUT
+            echo "TASK_FAMILY=${{ vars.TASK_FAMILY_PREPROD }}" >> $GITHUB_OUTPUT
+            echo "CONTAINER_NAME= ${{ vars.CONTAINER_NAME_PREPROD }}" >> $GITHUB_OUTPUT
+          else
+            echo "ENV=prod" >> $GITHUB_OUTPUT
+            echo "ECS_CLUSTER=${{ vars.ECS_CLUSTER_PROD }}" >> $GITHUB_OUTPUT
+            echo "ECS_SERVICE=${{ vars.ECS_SERVICE_PROD }}" >> $GITHUB_OUTPUT
+            echo "TASK_FAMILY=${{ vars.TASK_FAMILY_PROD }}" >> $GITHUB_OUTPUT
+            echo "CONTAINER_NAME= ${{ vars.CONTAINER_NAME_PROD }}" >> $GITHUB_OUTPUT
+          fi
+
+
+
+      - name: Verificar vars ECR
+        env:
+          AWS_ACCOUNT_ID: ${{ secrets.AWS_ACCOUNT_ID }}
+          AWS_REGION:     ${{ secrets.AWS_REGION }}
+          ECR_REPO:       ${{ secrets.ECR_REPO }}
+        run: |
+          : "${AWS_ACCOUNT_ID:?Falta AWS_ACCOUNT_ID}"
+          : "${AWS_REGION:?Falta AWS_REGION}"
+          : "${ECR_REPO:?Falta ECR_REPO}"
+
+
+      - name: Configurar credenciales AWS (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::${{ secrets.AWS_ACCOUNT_ID }}:role/github-actions-deploy
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Login ECR
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Calcular imagen y tag
+        id: imgtag
+        run: |
+          IMAGE="${{ secrets.AWS_ACCOUNT_ID }}.dkr.ecr.${{ secrets.AWS_REGION }}.amazonaws.com/${{ secrets.ECR_REPO }}"
+          TAG="${{ steps.envmap.outputs.ENV }}-${GITHUB_SHA}"
+          echo "IMAGE=${IMAGE}" >> $GITHUB_OUTPUT
+          echo "TAG=${TAG}" >> $GITHUB_OUTPUT
+
+
+      - name: Build & Push (ARG para token + secret file WPML)
+        id: build
+          
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: local-deploy/dockerfile
+          push: true
+          tags: ${{ steps.imgtag.outputs.IMAGE }}:${{ steps.imgtag.outputs.TAG }}
+          
+
+
+      - name: Exportar IMAGE_URI
+        id: image
+        run: echo "IMAGE_URI=${{ steps.imgtag.outputs.IMAGE }}:${{ steps.imgtag.outputs.TAG }}" >> $GITHUB_OUTPUT            
+
+      - name: Render task definition
+        id: render
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition-family: ${{ steps.envmap.outputs.TASK_FAMILY }}
+          container-name: ${{ steps.envmap.outputs.CONTAINER_NAME }}
+          image: ${{ steps.image.outputs.IMAGE_URI }}
+
+      - name: Deploy ECS service
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render.outputs.task-definition }}
+          service: ${{ steps.envmap.outputs.ECS_SERVICE }}
+          cluster: ${{ steps.envmap.outputs.ECS_CLUSTER }}
+          wait-for-service-stability: false
+
+      # wait while the service publish the container
+      - name: Wait ECS deployment to finish
+        run: |
+          aws ecs wait services-stable \
+            --cluster ${{ steps.envmap.outputs.ECS_CLUSTER }} \
+            --services ${{ steps.envmap.outputs.ECS_SERVICE }} \
+            --region ${{ secrets.AWS_REGION }}
