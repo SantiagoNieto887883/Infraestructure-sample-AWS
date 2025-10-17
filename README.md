@@ -1,6 +1,10 @@
 # Infraestructure-sample-AWS
 proyecto de ejemplo de infraestructura en AWS con escalabilidad, alta disponibilidad y seguridad con minimo privilegio
 
+lea tambien
+
+https://github.com/SantiagoNieto887883/Infraestructure-sample-AWS/edit/main/documents/justificacion.docx
+
 ---
 
 ## Comandos de despliegue
