@@ -12,6 +12,7 @@ https://github.com/SantiagoNieto887883/Infraestructure-sample-AWS/edit/main/docu
 debes crear los archivos .tfvars en las rutas:
 
 IAC/terraform/env/<<env>>/backend.tfvars
+
 IAC/terraform/env/<<env>>/terraform.tfvars
 
 
