@@ -94,3 +94,17 @@ environment = var.environment
 db_secret_name = var.db_secret_name
 kms_key_alias = var.kms_key_alias
 }
+
+# modulo de redis
+
+module "redis" {
+  source             = "../../modules/redis"
+  project            = var.project
+  environment        = var.environment
+  vpc_id             = module.network.vpc_id
+  subnet_ids         = module.network.private_subnet_ids
+  security_group_id  = module.security.redis_sg_id
+  node_type          = "cache.t3.micro"
+  num_cache_nodes    = 1
+  auth_token         = null  # o usa un secreto
+}
